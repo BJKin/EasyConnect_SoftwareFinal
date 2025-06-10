@@ -5,21 +5,26 @@ from django.utils.timezone import now
 from mainapp.models import Device
 import os
 import django
+from dotenv import load_dotenv
+
+load_dotenv()
+print("[DEBUG] MQTT Config:", MQTT_BROKER, MQTT_PORT, MQTT_USER)
 
 # Setup Django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
 django.setup()
 
 # Broker config
-MQTT_BROKER = "easy-connect-41c0ff2f.a02.usw2.aws.hivemq.cloud"
-MQTT_PORT = 8883
-MQTT_USER = "EasyConnect"
-MQTT_PASS = "Easyconnect-ece140b"
+MQTT_BROKER = os.getenv("MQTT_BROKER")
+MQTT_PORT = int(os.getenv("MQTT_PORT", 8883))
+MQTT_USER = os.getenv("MQTT_USER")
+MQTT_PASS = os.getenv("MQTT_PASS")
+
 
 def on_connect(client, userdata, flags, rc):
     print("[MQTT] Connected with result code", rc)
-    client.subscribe("event/+/available_devices/+")
-    client.subscribe("device/+/status")
+    client.subscribe("event/#")
+    client.subscribe("device/#")
 
 def on_message(client, userdata, msg):
     topic = msg.topic
@@ -28,16 +33,16 @@ def on_message(client, userdata, msg):
 
     try:
         if "available_devices" in topic:
-            parts = topic.split("/")
-            event_id = parts[1]
-            device_id = parts[3]
+            data = json.loads(payload)
+            _device_id = data.get("device_id")
+            _event_id = data.get("event_id")
+            _is_available = data.get("_is_available")
             Device.objects.update_or_create(
-                device_id=device_id,
-                defaults={
-                    "available": True,
-                    "last_seen": now()
-                }
+                device_id=_device_id,
+                event_id=_event_id,
+                available=_is_available
             )
+    
 
         elif "status" in topic:
             print(f"[MQTT] Status from device: {payload}")
