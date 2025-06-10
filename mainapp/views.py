@@ -229,7 +229,7 @@ def scan_ticket(request):
             device.available = False
             device.save()
             
-            # Send MQTT message to device
+            # Send MQTT message to device to assign ticket
             topic = f"device/{device.device_id}/assignment"
             success = publish_message(topic, _ticket_id)
             
@@ -299,6 +299,13 @@ def handle_profile_swap(event_id, ticket_id1, ticket_id2):
         Connection.objects.get_or_create(
             user1=user2, user2=user1, event_id=event_id
         )
+
+        # Send MQTT message to device to buzz motor
+        topic1 = f"event/{event_id}/profile_swap/{ticket_id1}"
+        topic2 = f"event/{event_id}/profile_swap/{ticket_id2}"
+        publish_message(topic1, "profile swap")
+        publish_message(topic2, "profile swap")
+
         
     except Ticket.DoesNotExist:
         print("[PROFILE SWAP ERROR] Invalid ticket IDs")
