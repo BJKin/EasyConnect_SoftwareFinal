@@ -14,9 +14,10 @@
       <h2>{{ event.name }}</h2>
       <p><strong>Date:</strong> {{ event.date }} {{ event.time }}</p>
       <p><strong>Location:</strong> {{ event.location }}</p>
-      <p><strong>Attendee Code:</strong> {{ event.attendee_code }}</p>
+      <p><strong>Attendee GA Code:</strong> {{ event.attendee_GA_code }}</p>
+      <p><strong>Attendee VIP Code:</strong> {{ event.attendee_VIP_code }}</p>
       <p><strong>Employee Code:</strong> {{ event.employee_code }}</p>
-      <p><strong>Total Attendees:</strong> {{ attendee_count }}</p>
+      <p><strong>Total Attendees:</strong> {{ event.attendee_count }}</p>
     </div>
   </section>
 {% endblock %}

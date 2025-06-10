@@ -1,6 +1,6 @@
 from django.shortcuts import render, redirect
 from mainapp.decorators import role_required
-from core.mqtt_client import latest_message, publish_message
+from core.mqtt_client import publish_message
 from django.http import JsonResponse
 from django.contrib import messages
 from django.utils import timezone
@@ -8,7 +8,7 @@ import uuid
 import random
 import string
 from datetime import datetime
-from .models import Event, Ticket, EmployeeProfile, Device, UserProfile
+from .models import Event, Ticket, EmployeeProfile, Device, UserProfile, Connection
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.csrf import csrf_exempt
 import json
@@ -32,23 +32,49 @@ def admin(request):
 def attendee(request):
     return attendee_dashboard(request)
 
+# Dashboard for attendees to view their tickets??
 def ticket_dashboard(request):
     msg = latest_message.get("easyconnect/ticket", "No ticket data")
     return render(request, "mainapp/dashboard.html", {"ticket_info": msg})
 
+# Generate a random 6 digit alphanumeric code for events and tickets
+def gen_code_6():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
+# Generate a random 2 digit code for events ids
+def gen_code_2():
+    return ''.join(random.choices(string.digits, k=2))
+    
+# Attendee dashboard
 @login_required
 @role_required('attendee')
 def attendee_dashboard(request):
     tickets = Ticket.objects.filter(user=request.user).order_by('event_date')
     now = timezone.now()
+    
+    # Get connections
+    connections = Connection.objects.filter(user1=request.user).select_related('user2')
+    connected_users = []
+    
+    for conn in connections:
+        profile, _ = UserProfile.objects.get_or_create(
+            user=conn.user2, 
+            defaults={'role': 'attendee'}
+        )
+        connected_users.append({
+            'user': conn.user2,
+            'profile': profile,
+            'event_id': conn.event_id
+        })
+    
     context = {
         'upcoming_events': tickets.filter(event_date__gte=now),
-        'past_events': tickets.filter(event_date__lt=now)
+        'past_events': tickets.filter(event_date__lt=now),
+        'connections': connected_users
     }
     return render(request, "main/attendee.html", context)
 
-
+# Attendee profile
 @login_required
 @role_required('attendee')
 def attendee_profile(request):
@@ -70,6 +96,7 @@ def attendee_profile(request):
     context = {'profile': profile}
     return render(request, 'main/profile.html', context)
 
+# Event creation
 @login_required
 @role_required('admin')
 def create_event(request):
@@ -80,18 +107,18 @@ def create_event(request):
         time_val = request.POST.get('time')
         location = request.POST.get('location')
 
-        def gen_code():
-            return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-
-        event = Event.objects.create(
+        Event.objects.create(
             name=name,
             description=description,
             date=date,
             time=time_val,
             location=location,
             host=request.user,
-            attendee_code=gen_code(),
-            employee_code=gen_code(),
+            attendee_GA_code=gen_code_6(),
+            attendee_VIP_code=gen_code_6(),
+            employee_code=gen_code_6(),
+            event_id="E_" + gen_code_2(),
+            attendee_count=0
         )
         messages.success(request, 'Event created successfully')
         return redirect('admin')
@@ -101,29 +128,49 @@ def get_events_json(request):
     events = Event.objects.all().values("id", "name", "location", "date", "time")
     return JsonResponse(list(events), safe=False)
 
-
+# Attendee joins an event using a code
 @login_required
 @csrf_exempt
 def join_event(request):
     if request.method == 'POST':
         event_code = request.POST.get('event_code')
+        
         try:
-            event = Event.objects.get(attendee_code=event_code)
+            # First try to find event by GA code
+            event = Event.objects.get(attendee_GA_code=event_code)
+            _ticket_type = 'GA'
         except Event.DoesNotExist:
-            messages.error(request, 'Invalid event code')
-            return redirect('attendee')
-
+            try:
+                # If GA code fails, try VIP code
+                event = Event.objects.get(attendee_VIP_code=event_code)
+                _ticket_type = 'VIP'
+            except Event.DoesNotExist:
+                messages.error(request, 'Invalid event code')
+                return redirect('attendee')
+        
+        # Get the event time and date
         event_dt = timezone.make_aware(datetime.combine(event.date, event.time))
-        Ticket.objects.get_or_create(
+
+        # Generate a ticket for the user if it doesn't exist
+        ticket, created = Ticket.objects.get_or_create(
             user=request.user,
-            event_name=event.name,
-            event_date=event_dt,
-            defaults={'ticket_id': uuid.uuid4().hex, 'ticket_type': 'GA'}
+            ticket_id = "T_" + gen_code_6(),
+            event_name = event.name,
+            event_date = event_dt,
+            ticket_type = _ticket_type,
+            event_id=event.event_id
         )
-        messages.success(request, 'Event joined successfully')
+
+        # Only update count and show success if ticket was created
+        if created:
+            event.attendee_count += 1
+            event.save()
+            messages.success(request, 'Event joined successfully')
+        else:
+            messages.info(request, 'You are already registered for this event')
+
         return redirect('attendee')
     return redirect('attendee')
-
 
 @login_required
 @role_required('employee')
@@ -137,6 +184,7 @@ def employee(request):
     }
     return render(request, 'main/employee.html', context)
 
+# 
 @csrf_exempt
 def join_event_employee(request):
     if request.method == 'POST':
@@ -159,52 +207,51 @@ def join_event_employee(request):
             messages.error(request, 'Invalid event code')
             return redirect('employee')
 
+# QR code scanning for tickets
 @csrf_exempt
-def scan_ticket_qr(request):
+def scan_ticket(request):
     if request.method == 'POST':
-        data = json.loads(request.body)
-        ticket_id = data.get('ticket_id')
         try:
-            Ticket.objects.get(ticket_id=ticket_id)
-            device = Device.objects.filter(available=True).first()
-            if device:
-                device.assigned_ticket = ticket_id
-                device.available = False
-                device.save()
-                publish_message(
-                    f"device/{device.device_id}/control",
-                    json.dumps({"ticket_id": ticket_id})
-                )
+            data = json.loads(request.body)
+            _ticket_id = data.get('ticket_id')
+            
+            # Get ticket and verify it exists
+            ticket = Ticket.objects.get(ticket_id=_ticket_id)
+            
+            # Find available device for the same event_id
+            device = Device.objects.filter(event_id=ticket.event_id, available=True).first()
+            
+            if not device:
+                return JsonResponse({'success': False, 'error': 'No available devices'})
+            
+            # Assign device to ticket
+            device.assigned_ticket = _ticket_id
+            device.available = False
+            device.save()
+            
+            # Send MQTT message to device
+            topic = f"device/{device.device_id}/assignment"
+            success = publish_message(topic, _ticket_id)
+            
+            if success:
                 return JsonResponse({'success': True, 'device_id': device.device_id})
             else:
-                return JsonResponse({'success': False, 'error': 'No available devices'})
+                device.assigned_ticket = None
+                device.available = True
+                device.save()
+                return JsonResponse({'success': False, 'error': 'Failed to contact device'})
+                
         except Ticket.DoesNotExist:
-            return JsonResponse({'success': False, 'error': 'Ticket not found'})
+            return JsonResponse({'success': False, 'error': 'Invalid ticket'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request'})
 
 
 @login_required
 def scanner_view(request):
     return render(request, 'main/scanner.html')
-
-@csrf_exempt
-def assign_device_api(request):
-    if request.method == 'POST':
-        data = json.loads(request.body)
-        ticket_id = data.get('ticket_id')
-
-        # Simulate device assignment logic
-    device = Device.objects.filter(available=True).first()
-    if device:
-        device.assigned_ticket = ticket_id
-        device.available = False
-        device.save()
-        publish_message(
-            f"device/{device.device_id}/control",
-            json.dumps({"ticket_id": ticket_id})
-        )
-        return JsonResponse({'success': True, 'message': f'Device {device.device_id} assigned.'})
-    else:
-        return JsonResponse({'success': False, 'message': 'No available devices.'})
 
 
 @login_required
@@ -235,5 +282,26 @@ def ticket_detail(request, ticket_id):
     }
     return render(request, 'main/ticket_detail.html', context)
 
-
+# Profile swap
+def handle_profile_swap(event_id, ticket_id1, ticket_id2):
+    try:
+        # Get tickets and users
+        ticket1 = Ticket.objects.get(ticket_id=ticket_id1, event_id=event_id)
+        ticket2 = Ticket.objects.get(ticket_id=ticket_id2, event_id=event_id)
+        
+        user1 = ticket1.user
+        user2 = ticket2.user
+        
+        # Create connections
+        Connection.objects.get_or_create(
+            user1=user1, user2=user2, event_id=event_id
+        )
+        Connection.objects.get_or_create(
+            user1=user2, user2=user1, event_id=event_id
+        )
+        
+    except Ticket.DoesNotExist:
+        print("[PROFILE SWAP ERROR] Invalid ticket IDs")
+    except Exception as e:
+        print(f"[PROFILE SWAP ERROR] {e}")
 

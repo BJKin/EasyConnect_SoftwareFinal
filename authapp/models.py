@@ -11,6 +11,7 @@ class UserManager(BaseUserManager):
         user.set_password(password)
         user.save(using=self._db)
         return user
+        
 
 class User(AbstractBaseUser, PermissionsMixin):
 

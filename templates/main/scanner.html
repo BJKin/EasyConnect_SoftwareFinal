@@ -19,6 +19,7 @@
 <section class="hero" data-aos="fade-in">
   <h2 class="hero-title">Scan Ticket QR</h2>
   <div class="glass-card">
+    {% csrf_token %}
     <button id="scan-btn" class="glow-button">Start Scanner</button>
   <div id="qr-reader" style="display:none;margin-top:1rem;"></div>
   <p id="scanner-output" style="margin-top:1rem;"></p>

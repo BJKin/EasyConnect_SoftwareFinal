@@ -30,26 +30,21 @@ class Event(models.Model):
     time = models.TimeField()
     location = models.CharField(max_length=255)
     host = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name='hosted_events')
-    attendee_code = models.CharField(max_length=10, unique=True)
+    attendee_GA_code = models.CharField(max_length=10, unique=True)
+    attendee_VIP_code = models.CharField(max_length=10, default="VIP123")
     employee_code = models.CharField(max_length=10, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    attendee_count = models.PositiveIntegerField(default=0)
+    event_id = models.CharField(max_length=10, default="E_00")
 
     def __str__(self):
         return f"{self.name} on {self.date}"
-
-# Ticket associated with users after joining an event
-# class Ticket(models.Model):
-#     user = models.ForeignKey(User, on_delete=models.CASCADE)
-#     event = models.ForeignKey(Event, on_delete=models.CASCADE)
-#     ticket_id = models.CharField(max_length=36, default=uuid.uuid4, unique=True)
-#     tier = models.CharField(max_length=20, default='General')
-
-#     def __str__(self):
-#         return f"{self.ticket_id} for {self.user.username}"
-
+    
+# Ticket for attendees
 class Ticket(models.Model):
     user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
     ticket_id = models.CharField(max_length=100, unique=True)
+    event_id = models.CharField(max_length=10, default="E_00")
     event_name = models.CharField(max_length=200)
     event_date = models.DateTimeField()
     ticket_type = models.CharField(max_length=50, choices=[
@@ -61,41 +56,10 @@ class Ticket(models.Model):
     def __str__(self):
         return f"{self.ticket_id} ({self.event_name})"
     
-
-# Vendor information for vendors
-# class VendorInfo(models.Model):
-#     user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
-#     event = models.ForeignKey(Event, on_delete=models.CASCADE)
-#     organization_name = models.CharField(max_length=100)
-#     description = models.TextField(blank=True)
-#     goal = models.TextField(blank=True)
-#     reps = models.TextField(blank=True)
-
-#     def __str__(self):
-#         return f"{self.organization_name} at {self.event.name}"
-
-# Connection between two ticket holders (recorded after handshake)
-class Connection(models.Model):
-    ticket_1 = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name='initiated_connections')
-    ticket_2 = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name='received_connections')
-    event = models.ForeignKey(Event, on_delete=models.CASCADE)
-    timestamp = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.ticket_1.ticket_id} ↔ {self.ticket_2.ticket_id}"
-
-# Devices that are available for assigning to attendees 
-# class Device(models.Model):
-#     device_id = models.CharField(max_length=50, unique=True)
-#     is_available = models.BooleanField(default=True)
-#     assigned_ticket = models.OneToOneField(Ticket, on_delete=models.SET_NULL, null=True, blank=True)
-#     assigned_event = models.ForeignKey(Event, on_delete=models.SET_NULL, null=True, blank=True)
-
-#     def __str__(self):
-#         return f"Device {self.device_id} ({'Available' if self.is_available else 'Assigned'})"
-    
+# Device 
 class Device(models.Model):
-    device_id = models.CharField(max_length=100, unique=True)
+    device_id = models.CharField(max_length=100)
+    event_id = models.CharField(max_length=10, default="E_00")
     assigned_ticket = models.CharField(max_length=100, blank=True, null=True)
     available = models.BooleanField(default=True)
     last_seen = models.DateTimeField(auto_now=True)
@@ -114,3 +78,16 @@ class EmployeeProfile(models.Model):
 
     def __str__(self):
         return f"Employee: {self.user.username}"
+    
+# Connection between two users at an event
+class Connection(models.Model):
+    user1 = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name='connections_as_user1')
+    user2 = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name='connections_as_user2')
+    event_id = models.CharField(max_length=10)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ['user1', 'user2', 'event_id']
+    
+    def __str__(self):
+        return f"{self.user1.username} ↔ {self.user2.username} at {self.event_id}"
